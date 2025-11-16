@@ -8,6 +8,7 @@ import logging
 import json
 import asyncio
 import re
+import calendar as cal_module
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import pytz
@@ -86,38 +87,88 @@ user_roles: Dict = {}  # Track user role: 'client', 'master', 'admin'
 # ========================
 
 class UltraCalendar:
-    """Visual 7-day calendar grid with emoji indicators"""
+    """Visual calendar grid with emoji indicators"""
     
     def __init__(self, master_name: str):
         self.master_name = master_name
         self.lunch_break = (13, 14)  # 13:00-14:00
+        self.tz = pytz.timezone('Europe/Moscow')
         
-    def create_visual_calendar(self, date_str: str = None) -> str:
-        """Create visual calendar representation"""
+    def create_visual_calendar(self, date_str: str = None, offset_days: int = 0) -> str:
+        """Create visual calendar grid (14 days in 2 rows of 7)"""
         if date_str is None:
-            date = datetime.now()
+            date = datetime.now(self.tz).date()
         else:
-            date = datetime.strptime(date_str, "%Y-%m-%d")
+            date = datetime.strptime(date_str, "%Y-%m-%d").date()
         
-        calendar_text = f"📅 *Календарь мастера {self.master_name}*\n"
-        calendar_text += f"*{date.strftime('%B %Y')}*\n\n"
+        # Add offset
+        date = date + timedelta(days=offset_days)
         
-        # Show 7 days
-        for i in range(7):
-            current_date = date + timedelta(days=i)
-            date_formatted = current_date.strftime("%Y-%m-%d")
-            day_name = current_date.strftime("%a")
+        calendar_text = f"📅 *{date.strftime('%B %Y')}*\n"
+        calendar_text += "─" * 35 + "\n"
+        
+        # Days of week header
+        days_header = "ПН  ВТ  СР  ЧТ  ПТ  СБ  ВС\n"
+        calendar_text += days_header
+        calendar_text += "─" * 35 + "\n"
+        
+        # Calculate first day of month
+        first_day_of_month = date.replace(day=1)
+        start_weekday = first_day_of_month.weekday()  # 0=Monday
+        
+        # Days in month
+        days_in_month = cal_module.monthrange(date.year, date.month)[1]
+        
+        # Build calendar grid
+        day = 1
+        for week in range(6):
+            week_str = ""
+            for weekday in range(7):
+                cell_pos = week * 7 + weekday
+                
+                if cell_pos < start_weekday or day > days_in_month:
+                    week_str += "    "  # Empty cell
+                else:
+                    current_date_obj = date.replace(day=day)
+                    is_available = self.is_date_available(current_date_obj.strftime("%Y-%m-%d"))
+                    
+                    if current_date_obj == datetime.now(self.tz).date():
+                        emoji = "🔵"  # Today
+                    elif is_available:
+                        emoji = "🟢"  # Available
+                    else:
+                        emoji = "🔴"  # Not available
+                    
+                    week_str += f"{emoji}{day:2d} "
+                    day += 1
             
-            # Check if date is available
-            is_available = self.is_date_available(date_formatted)
-            emoji = "🟢" if is_available else "🔴"
-            
-            if current_date.date() == datetime.now().date():
-                emoji = "⚪"  # Today
-            
-            calendar_text += f"{emoji} {day_name} {current_date.strftime('%d.%m')} `{date_formatted}`\n"
+            calendar_text += week_str.rstrip() + "\n"
+        
+        calendar_text += "─" * 35 + "\n"
+        calendar_text += "🟢 свободно | 🔵 сегодня | 🔴 занято"
         
         return calendar_text
+    
+    def create_time_grid(self, date_str: str) -> tuple:
+        """Create time slots in grid format (3 columns, 5 rows)"""
+        available_times = self.generate_available_times(date_str)
+        
+        if not available_times:
+            return None, "❌ На эту дату нет свободных слотов"
+        
+        # Create grid text
+        time_text = f"⏰ *Доступные времена на {date_str}*\n"
+        time_text += "─" * 25 + "\n"
+        
+        # Format times in grid (3 columns)
+        for i in range(0, len(available_times), 3):
+            row = available_times[i:i+3]
+            row_text = "  ".join([f"{t:>5}" for t in row])
+            time_text += row_text + "\n"
+        
+        time_text += "─" * 25
+        
+        return available_times, time_text
     
     def is_date_available(self, date_str: str) -> bool:
         """Check if date is available for booking"""
@@ -128,7 +179,7 @@ class UltraCalendar:
             return False
         
         # Check if date is in past
-        if date_obj.date() < datetime.now().date():
+        if date_obj.date() < datetime.now(self.tz).date():
             return False
         
         # Check if master has vacation
@@ -153,16 +204,16 @@ class UltraCalendar:
         
         start_hour = int(working_hours["start"].split(":")[0])
         end_hour = int(working_hours["end"].split(":")[0])
+        lunch_start = int(lunch[0].split(":")[0])
+        lunch_end = int(lunch[1].split(":")[0])
         
         for hour in range(start_hour, end_hour):
             for minute in ["00", "30"]:
-                time_str = f"{hour:02d}:{minute}"
-                
                 # Skip lunch break
-                lunch_start = int(lunch[0].split(":")[0])
-                lunch_end = int(lunch[1].split(":")[0])
                 if lunch_start <= hour < lunch_end:
                     continue
+                
+                time_str = f"{hour:02d}:{minute}"
                 
                 # Check if slot is booked
                 is_booked = any(
@@ -253,11 +304,11 @@ async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📅 Записаться", callback_data="start_booking")],
         [InlineKeyboardButton("📋 Мои записи", callback_data="my_bookings")],
         [InlineKeyboardButton("🌐 Веб-приложение", callback_data="open_webapp")],
-        [InlineKeyboardButton("⬅️ Назад (выбор роли)", callback_data="show_roles")],
+        [InlineKeyboardButton("⬅️ Изменить роль", callback_data="show_roles")],
     ]
     
     await query.edit_message_text(
-        "👤 *Клиентское меню*\n\n"
+        "👤 *КЛИЕНТСКОЕ МЕНЮ*\n\n"
         "Выберите действие:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
@@ -292,73 +343,79 @@ async def show_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start booking process"""
+    """Start booking process - show services"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     user_sessions[user_id] = {}
     
-    # Show services
+    # Show services with prices
     keyboard = []
-    for service in CONFIG["services"].keys():
+    for service, price in CONFIG["services"].items():
         keyboard.append([InlineKeyboardButton(
-            f"✂️ {service}",
+            f"✂️ {service} — {price}₽",
             callback_data=f"service_{service}"
         )])
     
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")])
+    keyboard.append([InlineKeyboardButton("☰ Меню", callback_data="back_to_client")])
     
     await query.edit_message_text(
-        "🛍️ *Выберите услугу:*",
+        "🛍️ *ВЫБЕРИТЕ УСЛУГУ:*\n\n",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 
 async def handle_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle service selection"""
+    """Handle service selection and show masters"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     service = query.data.replace("service_", "")
+    price = CONFIG["services"].get(service, 0)
     
     user_sessions[user_id]["service"] = service
     
-    # Show masters
+    # Show masters with specializations
     keyboard = []
-    for master_name in CONFIG["masters"].keys():
+    for master_name, master_info in CONFIG["masters"].items():
+        spec = ", ".join(master_info["specialization"])
         keyboard.append([InlineKeyboardButton(
-            f"👨‍💼 {master_name}",
+            f"👨‍💼 {master_name}\n   {spec}",
             callback_data=f"master_{master_name}"
         )])
     
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")])
+    keyboard.append([InlineKeyboardButton("☰ Меню", callback_data="back_to_client")])
     
     await query.edit_message_text(
-        f"🎯 *Услуга:* {service}\n\n*Выберите мастера:*",
+        f"✂️ *УСЛУГА:* {service} ({price}₽)\n\n"
+        f"*ВЫБЕРИТЕ МАСТЕРА:*",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 
 async def handle_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle master selection"""
+    """Handle master selection and show date selector"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     master = query.data.replace("master_", "")
     
     user_sessions[user_id]["master"] = master
     
     # Show calendar with date buttons
     calendar = UltraCalendar(master)
+    calendar_text = calendar.create_visual_calendar()
     
-    # Generate date buttons
+    # Generate date buttons (2 columns, next 14 days)
     keyboard = []
-    for i in range(7):
+    for i in range(14):
         current_date = datetime.now() + timedelta(days=i)
         date_formatted = current_date.strftime("%Y-%m-%d")
         day_name = current_date.strftime("%a")
@@ -366,29 +423,32 @@ async def handle_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_available = calendar.is_date_available(date_formatted)
         
         if is_available:
-            button_text = f"📅 {day_name} {current_date.strftime('%d.%m')}"
-            keyboard.append([InlineKeyboardButton(
-                button_text,
+            button_text = f"{day_name} {current_date.strftime('%d.%m')}"
+            if i == 0:
+                button_text += " (сегодня)"
+            keyboard.append(InlineKeyboardButton(
+                f"🟢 {button_text}",
                 callback_data=f"date_{date_formatted}"
-            )])
+            ))
     
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")])
-    
-    calendar_text = calendar.create_visual_calendar()
+    # Arrange in rows of 2
+    keyboard_rows = [keyboard[i:i+2] for i in range(0, len(keyboard), 2)]
+    keyboard_rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")])
+    keyboard_rows.append([InlineKeyboardButton("☰ Меню", callback_data="back_to_client")])
     
     await query.edit_message_text(
-        calendar_text + "\n*Выберите дату:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        calendar_text + f"\n👨‍💼 *Мастер: {master}*\n\n*Выберите дату:*",
+        reply_markup=InlineKeyboardMarkup(keyboard_rows),
         parse_mode=ParseMode.MARKDOWN
     )
 
 
 async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle date selection from callback"""
+    """Handle date selection and show available times"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     date_str = query.data.replace("date_", "")
     
     user_sessions[user_id]["date"] = date_str
@@ -396,38 +456,51 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show available times
     master = user_sessions[user_id]["master"]
     calendar = UltraCalendar(master)
-    available_times = calendar.generate_available_times(date_str)
+    available_times, time_text = calendar.create_time_grid(date_str)
     
-    if not available_times:
+    if available_times is None:
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")],
+            [InlineKeyboardButton("☰ Меню", callback_data="back_to_client")]
+        ]
         await query.edit_message_text(
-            "❌ *На эту дату нет свободных слотов*\n\n"
-            "Выберите другую дату.",
+            time_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
         return
     
+    # Create time buttons (3 columns)
     keyboard = []
     for time_slot in available_times:
-        keyboard.append([InlineKeyboardButton(
+        keyboard.append(InlineKeyboardButton(
             f"🕐 {time_slot}",
             callback_data=f"time_{time_slot}"
-        )])
+        ))
     
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")])
+    # Arrange in rows of 3
+    time_rows = [keyboard[i:i+3] for i in range(0, len(keyboard), 3)]
+    time_rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")])
+    time_rows.append([InlineKeyboardButton("☰ Меню", callback_data="back_to_client")])
+    
+    date_formatted = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y (%a)")
     
     await query.edit_message_text(
-        f"⏰ *Доступные времена на {date_str}:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"⏰ *Выберите время на {date_formatted}*\n\n"
+        f"👨‍💼 *Мастер:* {master}\n"
+        f"✂️ *Услуга:* {user_sessions[user_id]['service']}\n\n"
+        + time_text,
+        reply_markup=InlineKeyboardMarkup(time_rows),
         parse_mode=ParseMode.MARKDOWN
     )
 
 
 async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle time selection"""
+    """Handle time selection and show confirmation"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     time_str = query.data.replace("time_", "")
     
     user_sessions[user_id]["time"] = time_str
@@ -440,20 +513,26 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time = session["time"]
     price = CONFIG["services"].get(service, 0)
     
+    date_obj = datetime.strptime(date, "%Y-%m-%d")
+    date_formatted = date_obj.strftime("%d.%m.%Y (%A)")
+    
     confirmation_text = (
-        f"✂️ *Услуга:* {service}\n"
-        f"👨‍💼 *Мастер:* {master}\n"
-        f"📅 *Дата:* {date}\n"
-        f"🕐 *Время:* {time}\n"
-        f"💰 *Цена:* {price}₽\n\n"
-        f"*Подтвердить запись?*"
+        f"📋 *Проверьте ваши данные:*\n\n"
+        f"✂️ *Услуга:*\n   {service}\n\n"
+        f"👨‍💼 *Мастер:*\n   {master}\n\n"
+        f"📅 *Дата:*\n   {date_formatted}\n\n"
+        f"⏰ *Время:*\n   {time}\n\n"
+        f"💰 *Стоимость:*\n   {price}₽\n\n"
+        f"Подтвердить запись?"
     )
     
     keyboard = [
         [
             InlineKeyboardButton("✅ Да", callback_data="confirm_yes"),
             InlineKeyboardButton("❌ Нет", callback_data="confirm_no")
-        ]
+        ],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")],
+        [InlineKeyboardButton("☰ Меню", callback_data="back_to_client")]
     ]
     
     await query.edit_message_text(
@@ -468,12 +547,20 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     action = query.data.replace("confirm_", "")
     
     if action == "no":
         user_sessions[user_id] = {}
-        await query.edit_message_text("❌ Запись отменена")
+        keyboard = [
+            [InlineKeyboardButton("📅 Записаться", callback_data="start_booking")],
+            [InlineKeyboardButton("☰ Меню", callback_data="back_to_client")]
+        ]
+        await query.edit_message_text(
+            "❌ *Запись отменена*",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
     
     session = user_sessions[user_id]
@@ -510,21 +597,37 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         await app.bot.send_message(
             chat_id=CONFIG["admin_id"],
             text=(
-                f"✅ *Новая запись!*\n"
-                f"Услуга: {booking['service']}\n"
-                f"Мастер: {booking['master']}\n"
-                f"Дата: {booking['date']} {booking['time']}\n"
-                f"Цена: {booking['price']}₽"
+                f"✅ *Новая запись!*\n\n"
+                f"✂️ Услуга: {booking['service']}\n"
+                f"👨‍💼 Мастер: {booking['master']}\n"
+                f"📅 Дата: {booking['date']}\n"
+                f"⏰ Время: {booking['time']}\n"
+                f"💰 Цена: {booking['price']}₽\n"
+                f"👤 Клиент ID: {booking['user_id']}"
             ),
             parse_mode=ParseMode.MARKDOWN
         )
     except Exception as e:
         logger.error(f"Error notifying admin: {e}")
     
+    keyboard = [
+        [InlineKeyboardButton("📅 Записаться ещё", callback_data="start_booking")],
+        [InlineKeyboardButton("📋 Мои записи", callback_data="my_bookings")],
+        [InlineKeyboardButton("☰ Меню", callback_data="back_to_client")]
+    ]
+    
+    date_obj = datetime.strptime(booking["date"], "%Y-%m-%d")
+    
     await query.edit_message_text(
         f"✅ *Запись успешно создана!*\n\n"
         f"ID: `{booking_id}`\n"
-        f"Спасибо за выбор {CONFIG['salon_name']}!",
+        f"✂️ {booking['service']}\n"
+        f"👨‍💼 {booking['master']}\n"
+        f"📅 {date_obj.strftime('%d.%m.%Y (%A)')}\n"
+        f"⏰ {booking['time']}\n"
+        f"💰 {booking['price']}₽\n\n"
+        f"Спасибо за выбор *{CONFIG['salon_name']}*!",
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -534,7 +637,7 @@ async def my_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     
     user_bookings = [
         b for b in bookings.values()
@@ -544,27 +647,30 @@ async def my_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_bookings:
         keyboard = [
             [InlineKeyboardButton("📅 Записаться", callback_data="start_booking")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")]
+            [InlineKeyboardButton("☰ Меню", callback_data="back_to_client")]
         ]
         await query.edit_message_text(
-            "📭 *У вас пока нет записей*",
+            "📭 *У ВАС ПОКА НЕ ТОО ЗАПИСЕЙ*",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
         return
     
-    text = "📋 *Ваши записи:*\n\n"
-    for booking in user_bookings[:10]:
+    text = "📋 *МОИ ЗАПИСИ:*\n\n"
+    for i, booking in enumerate(user_bookings[:10], 1):
+        date_obj = datetime.strptime(booking['date'], "%Y-%m-%d")
         text += (
-            f"✂️ {booking['service']}\n"
-            f"👨‍💼 {booking['master']}\n"
-            f"📅 {booking['date']} {booking['time']}\n"
-            f"💰 {booking['price']}₽\n"
-            f"─────────\n"
+            f"{i}. ✂️ {booking['service']}\n"
+            f"   👨‍💼 Мастер: {booking['master']}\n"
+            f"   📅 {date_obj.strftime('%d.%m.%Y')}\n"
+            f"   ⏰ {booking['time']}\n"
+            f"   💰 {booking['price']}₽\n"
+            f"   ID: `{booking['id']}`\n\n"
         )
     
     keyboard = [
-        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")]
+        [InlineKeyboardButton("📅 Записаться ещё", callback_data="start_booking")],
+        [InlineKeyboardButton("☰ Меню", callback_data="back_to_client")]
     ]
     
     await query.edit_message_text(
