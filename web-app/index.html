@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Чародейка - Запись к мастеру</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>💇 Чародейка</h1>
+            <p>Салон красоты</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Step 1: Service Selection -->
+            <section id="step-services" class="step">
+                <h2>Выберите услугу</h2>
+                <div id="services-list" class="services-grid">
+                    <!-- Services will be loaded here -->
+                </div>
+            </section>
+
+            <!-- Step 2: Master Selection -->
+            <section id="step-masters" class="step hidden">
+                <h2>Выберите мастера</h2>
+                <div id="masters-list" class="masters-grid">
+                    <!-- Masters will be loaded here -->
+                </div>
+            </section>
+
+            <!-- Step 3: Calendar Selection -->
+            <section id="step-calendar" class="step hidden">
+                <h2>Выберите дату</h2>
+                <div id="calendar" class="calendar">
+                    <!-- Calendar will be loaded here -->
+                </div>
+            </section>
+
+            <!-- Step 4: Time Selection -->
+            <section id="step-time" class="step hidden">
+                <h2>Выберите время</h2>
+                <div id="time-slots" class="time-grid">
+                    <!-- Time slots will be loaded here -->
+                </div>
+            </section>
+
+            <!-- Step 5: Confirmation -->
+            <section id="step-confirmation" class="step hidden">
+                <h2>Подтверждение записи</h2>
+                <div id="confirmation-details" class="confirmation-box">
+                    <!-- Details will be loaded here -->
+                </div>
+                <div class="confirmation-buttons">
+                    <button id="confirm-btn" class="btn btn-primary">✅ Подтвердить</button>
+                    <button id="cancel-btn" class="btn btn-secondary">❌ Отменить</button>
+                </div>
+            </section>
+
+            <!-- Success Message -->
+            <section id="step-success" class="step hidden">
+                <div class="success-message">
+                    <h2>✅ Успешно!</h2>
+                    <p id="success-text"></p>
+                    <button id="new-booking-btn" class="btn btn-primary">📅 Новая запись</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Navigation -->
+        <nav class="navigation">
+            <button id="back-btn" class="btn btn-nav">⬅️ Назад</button>
+            <button id="reset-btn" class="btn btn-nav">🔄 Сначала</button>
+        </nav>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

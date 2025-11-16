@@ -65,7 +65,8 @@ CONFIG = {
             "closed_days": [6, 7]  # Saturday, Sunday
         }
     },
-    "payments": ["cash", "card", "online"]
+    "payments": ["cash", "card", "online"],
+    "web_app_url": "https://charodeyka-booking.netlify.app"  # Mini App URL
 }
 
 # ========================
@@ -78,6 +79,7 @@ user_sessions: Dict = {}
 master_stats: Dict = {}
 master_schedules: Dict = {}
 analytics_data: Dict = {}
+user_roles: Dict = {}  # Track user role: 'client', 'master', 'admin'
 
 # ========================
 # ULTRACALENDAR CLASS
@@ -178,11 +180,11 @@ class UltraCalendar:
 
 
 # ========================
-# HANDLER FUNCTIONS
+# ROLE SELECTION
 # ========================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler"""
+async def show_role_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show role selection menu at start"""
     user = update.effective_user
     user_id = user.id
     
@@ -195,22 +197,95 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
     
     keyboard = [
-        [InlineKeyboardButton("📅 Записаться", callback_data="start_booking")],
-        [InlineKeyboardButton("📋 Мои записи", callback_data="my_bookings")],
+        [InlineKeyboardButton("👤 Клиент (записаться)", callback_data="role_client")],
+        [InlineKeyboardButton("👨‍💼 Мастер", callback_data="role_master")],
+        [InlineKeyboardButton("👨‍💼 Администратор", callback_data="role_admin")],
     ]
-    
-    # Add admin/master buttons if applicable
-    if user_id == CONFIG["admin_id"]:
-        keyboard.append([InlineKeyboardButton("👨‍💼 Админ панель", callback_data="admin_panel")])
-    
-    for master_name, master_info in CONFIG["masters"].items():
-        if user_id == master_info["telegram_id"]:
-            keyboard.append([InlineKeyboardButton("📊 Мастер панель", callback_data="master_panel")])
-            break
     
     await update.message.reply_text(
         f"👋 *Добро пожаловать в {CONFIG['salon_name']}!*\n\n"
-        f"Выберите действие:",
+        f"Выберите вашу роль:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def handle_role_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle role selection"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    role = query.data.replace("role_", "")
+    
+    user_roles[user_id] = role
+    
+    if role == "admin":
+        if user_id == CONFIG["admin_id"]:
+            await admin_panel(update, context)
+        else:
+            await query.edit_message_text(
+                "❌ *Доступ запрещен. Вы не администратор.*",
+                parse_mode=ParseMode.MARKDOWN
+            )
+    elif role == "master":
+        # Check if user is registered as master
+        is_master = any(
+            info["telegram_id"] == user_id 
+            for info in CONFIG["masters"].values()
+        )
+        if is_master:
+            await master_panel(update, context)
+        else:
+            await query.edit_message_text(
+                "❌ *Вы не зарегистрированы как мастер.*",
+                parse_mode=ParseMode.MARKDOWN
+            )
+    else:  # client
+        await show_client_menu(update, context)
+
+
+async def show_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show client menu"""
+    query = update.callback_query
+    
+    keyboard = [
+        [InlineKeyboardButton("📅 Записаться", callback_data="start_booking")],
+        [InlineKeyboardButton("📋 Мои записи", callback_data="my_bookings")],
+        [InlineKeyboardButton("🌐 Веб-приложение", callback_data="open_webapp")],
+        [InlineKeyboardButton("⬅️ Назад (выбор роли)", callback_data="show_roles")],
+    ]
+    
+    await query.edit_message_text(
+        "👤 *Клиентское меню*\n\n"
+        "Выберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+# ========================
+# HANDLER FUNCTIONS
+# ========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start command handler"""
+    await show_role_selection(update, context)
+
+
+async def show_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show role selection again"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("👤 Клиент (записаться)", callback_data="role_client")],
+        [InlineKeyboardButton("👨‍💼 Мастер", callback_data="role_master")],
+        [InlineKeyboardButton("👨‍💼 Администратор", callback_data="role_admin")],
+    ]
+    
+    await query.edit_message_text(
+        f"👋 *Выберите вашу роль:*",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -232,7 +307,7 @@ async def start_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
             callback_data=f"service_{service}"
         )])
     
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_start")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")])
     
     await query.edit_message_text(
         "🛍️ *Выберите услугу:*",
@@ -278,16 +353,31 @@ async def handle_master(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_sessions[user_id]["master"] = master
     
-    # Show calendar
+    # Show calendar with date buttons
     calendar = UltraCalendar(master)
+    
+    # Generate date buttons
+    keyboard = []
+    for i in range(7):
+        current_date = datetime.now() + timedelta(days=i)
+        date_formatted = current_date.strftime("%Y-%m-%d")
+        day_name = current_date.strftime("%a")
+        
+        is_available = calendar.is_date_available(date_formatted)
+        
+        if is_available:
+            button_text = f"📅 {day_name} {current_date.strftime('%d.%m')}"
+            keyboard.append([InlineKeyboardButton(
+                button_text,
+                callback_data=f"date_{date_formatted}"
+            )])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")])
+    
     calendar_text = calendar.create_visual_calendar()
     
-    keyboard = [
-        [InlineKeyboardButton("⬅️ Назад", callback_data="start_booking")]
-    ]
-    
     await query.edit_message_text(
-        calendar_text,
+        calendar_text + "\n*Выберите дату:*",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -310,7 +400,8 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not available_times:
         await query.edit_message_text(
-            "❌ *На эту дату нет свободных слотов*",
+            "❌ *На эту дату нет свободных слотов*\n\n"
+            "Выберите другую дату.",
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -451,8 +542,13 @@ async def my_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     if not user_bookings:
+        keyboard = [
+            [InlineKeyboardButton("📅 Записаться", callback_data="start_booking")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")]
+        ]
         await query.edit_message_text(
             "📭 *У вас пока нет записей*",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -467,7 +563,34 @@ async def my_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"─────────\n"
         )
     
-    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")]
+    ]
+    
+    await query.edit_message_text(
+        text, 
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def open_webapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Open mini app web application"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("🌐 Открыть приложение", 
+                             web_app=WebAppInfo(url=CONFIG["web_app_url"]))],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_client")]
+    ]
+    
+    await query.edit_message_text(
+        "🌐 *Веб-приложение для бронирования*\n\n"
+        "Нажмите кнопку ниже, чтобы открыть удобное приложение для записи:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -496,11 +619,88 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👨‍💼 Управление мастерами", callback_data="admin_masters")],
         [InlineKeyboardButton("⚙️ Настройки", callback_data="admin_settings")],
         [InlineKeyboardButton("📈 Аналитика", callback_data="admin_analytics")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_start")]
+        [InlineKeyboardButton("⬅️ Назад", callback_data="show_roles")]
     ]
     
     await query.edit_message_text(
         stats_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def admin_masters(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin masters management"""
+    query = update.callback_query
+    await query.answer()
+    
+    masters_text = "👨‍💼 *Управление мастерами*\n\n"
+    for master_name, master_info in CONFIG["masters"].items():
+        spec = ", ".join(master_info["specialization"])
+        masters_text += f"• {master_name}\n  Специализация: {spec}\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить мастера", callback_data="add_master")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel")]
+    ]
+    
+    await query.edit_message_text(
+        masters_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin settings"""
+    query = update.callback_query
+    await query.answer()
+    
+    settings_text = (
+        "⚙️ *Настройки салона*\n\n"
+        f"📍 Адрес: {CONFIG['salon_info']['address']}\n"
+        f"📞 Телефон: {CONFIG['salon_info']['phone']}\n"
+        f"🕒 Начало работы: {CONFIG['salon_info']['working_hours']['start']}\n"
+        f"🕕 Конец работы: {CONFIG['salon_info']['working_hours']['end']}\n"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("✏️ Изменить настройки", callback_data="edit_settings")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel")]
+    ]
+    
+    await query.edit_message_text(
+        settings_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def admin_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin analytics"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Calculate statistics
+    total_bookings = len([b for b in bookings.values() if b["status"] == "confirmed"])
+    total_revenue = sum(b["price"] for b in bookings.values() if b["status"] == "confirmed")
+    
+    analytics_text = (
+        "📈 *Аналитика*\n\n"
+        f"📊 Всего записей: {total_bookings}\n"
+        f"💰 Общий доход: {total_revenue}₽\n\n"
+        f"*По мастерам:*\n"
+    )
+    
+    for master_name, stats in master_stats.items():
+        analytics_text += f"• {master_name}: {stats['bookings']} записей, {stats['revenue']}₽\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel")]
+    ]
+    
+    await query.edit_message_text(
+        analytics_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -511,7 +711,7 @@ async def master_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    user_id = query.from_user.id
     
     # Find master name
     master_name = None
@@ -548,7 +748,7 @@ async def master_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             panel_text += f"  • {booking['time']} - {booking['service']} ({booking['price']}₽)\n"
     
     keyboard = [
-        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_start")]
+        [InlineKeyboardButton("⬅️ Назад", callback_data="show_roles")]
     ]
     
     await query.edit_message_text(
@@ -558,11 +758,22 @@ async def master_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Go back to start"""
+async def back_to_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Go back to client menu"""
     query = update.callback_query
     await query.answer()
-    await start(update, context)
+    await show_client_menu(update, context)
+
+
+async def stub_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stub callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "⚙️ *Эта функция находится в разработке*",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 # ========================
@@ -578,7 +789,12 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     
-    # Callback handlers
+    # Role selection
+    application.add_handler(CallbackQueryHandler(handle_role_selection, pattern="^role_"))
+    application.add_handler(CallbackQueryHandler(show_roles, pattern="^show_roles$"))
+    
+    # Client handlers
+    application.add_handler(CallbackQueryHandler(show_client_menu, pattern="^back_to_client$"))
     application.add_handler(CallbackQueryHandler(start_booking, pattern="^start_booking$"))
     application.add_handler(CallbackQueryHandler(handle_service, pattern="^service_"))
     application.add_handler(CallbackQueryHandler(handle_master, pattern="^master_"))
@@ -586,9 +802,19 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_time, pattern="^time_"))
     application.add_handler(CallbackQueryHandler(handle_confirmation, pattern="^confirm_"))
     application.add_handler(CallbackQueryHandler(my_bookings, pattern="^my_bookings$"))
+    application.add_handler(CallbackQueryHandler(open_webapp, pattern="^open_webapp$"))
+    
+    # Admin handlers
     application.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
+    application.add_handler(CallbackQueryHandler(admin_masters, pattern="^admin_masters$"))
+    application.add_handler(CallbackQueryHandler(admin_settings, pattern="^admin_settings$"))
+    application.add_handler(CallbackQueryHandler(admin_analytics, pattern="^admin_analytics$"))
+    
+    # Master handlers
     application.add_handler(CallbackQueryHandler(master_panel, pattern="^master_panel$"))
-    application.add_handler(CallbackQueryHandler(back_to_start, pattern="^back_to_start$"))
+    
+    # Stub handlers
+    application.add_handler(CallbackQueryHandler(stub_handler, pattern="^(add_master|edit_settings)$"))
     
     # Error handler
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
